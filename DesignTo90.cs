@@ -2,6 +2,7 @@
 using BepInEx.Logging;
 using HarmonyLib;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
 using UnityEngine;
@@ -25,6 +26,7 @@ namespace DesignTo90
             harmony.PatchAll(typeof(EnableFullBuild));
             harmony.PatchAll(typeof(NodeBuildLimiter));
             harmony.PatchAll(typeof(NodeLimitReAuto));
+            harmony.PatchAll(typeof(FrameLimiter));
             Logger.LogMessage("DesignTo90 patches complete");
         }
 
@@ -33,10 +35,16 @@ namespace DesignTo90
             harmony.UnpatchSelf();
         }
 
+        private static bool AllowedByLatitiude (DysonNode node)
+        {
+            if (node == null) return true;
+            return Mathf.RoundToInt(Mathf.Asin(Mathf.Clamp01(Mathf.Abs(node.pos.normalized.y))) * Mathf.Rad2Deg) <= Mathf.RoundToInt(GameMain.history.dysonNodeLatitude);
+        }
+
         [HarmonyPatch]
         public static class EnableFullBuild
         {
-            public static FieldInfo dysonNodeLatitude = AccessTools.Field(typeof(GameHistoryData), nameof(GameHistoryData.dysonNodeLatitude));
+            private static readonly FieldInfo dysonNodeLatitude = AccessTools.Field(typeof(GameHistoryData), nameof(GameHistoryData.dysonNodeLatitude));
 
             public static IEnumerable<MethodBase> TargetMethods()
             {
@@ -47,7 +55,7 @@ namespace DesignTo90
 
             public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
             {
-                foreach (var instruction in instructions)
+                foreach (CodeInstruction instruction in instructions)
                 {
                     if (instruction.LoadsField(dysonNodeLatitude))
                     {
@@ -73,8 +81,37 @@ namespace DesignTo90
                 if (DSPGame.IsMenuDemo) return;
                 if (__result <= 0)
                     return;
-                if (Mathf.RoundToInt(Mathf.Asin(Mathf.Clamp01(Mathf.Abs(__instance.pos.normalized.y))) * Mathf.Rad2Deg) > Mathf.RoundToInt(GameMain.history.dysonNodeLatitude))
+                if (!AllowedByLatitiude(__instance))
                     __result = 0;
+            }
+        }
+
+        [HarmonyPatch]
+        public static class FrameLimiter
+        {
+            private static readonly FieldInfo spMax = AccessTools.Field(typeof(DysonFrame), nameof(DysonFrame.spMax));
+
+            private static int CheckSpMax(DysonFrame dysonFrame)
+            {
+                if (DSPGame.IsMenuDemo) return dysonFrame.spMax;
+                if (!AllowedByLatitiude(dysonFrame.nodeA) || !AllowedByLatitiude(dysonFrame.nodeB)) return 0;
+                else return dysonFrame.spMax;
+            }
+
+            public static IEnumerable<MethodBase> TargetMethods()
+            {
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructSp));
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcSpReq));
+            }
+
+            public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            {
+                foreach (CodeInstruction instruction in instructions)
+                {
+                    if (instruction.LoadsField(spMax))
+                        yield return CodeInstruction.Call(typeof(FrameLimiter), nameof(CheckSpMax));
+                    else yield return instruction;
+                }
             }
         }
 
@@ -89,14 +126,19 @@ namespace DesignTo90
             public static void Postfix(int func)
             {
                 if (func != 26) return; // this a const in the code anywhere?
-                if (GameMain.data.dysonSpheres ==  null) return;
+                if (GameMain.data.dysonSpheres == null) return;
                 foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres)
                 {
                     if (dysonSphere == null || dysonSphere.layerCount <= 0) continue;
+
                     //const int autoNodesAfterExpansion = DysonSphere.kAutoNodeMax;
                     const int autoNodesAfterExpansion = 1;
                     for (int i = 0; i < autoNodesAfterExpansion; i++)
                         dysonSphere.PickAutoNode();
+
+                    foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
+                        foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
+                            node?.RecalcSpReq();
                 }
             }
         }
