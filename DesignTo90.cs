@@ -1,7 +1,6 @@
 ﻿using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -29,7 +28,6 @@ namespace DesignTo90
             harmony.PatchAll(typeof(FrameLimiter));
             harmony.PatchAll(typeof(ShellLimiter));
             harmony.PatchAll(typeof(NodeLimitReAuto));
-            Logger.LogMessage("DesignTo90 patches complete");
         }
 
         private void OnDestroy()
@@ -37,10 +35,12 @@ namespace DesignTo90
             harmony.UnpatchSelf();
         }
 
+        private static int NodeLatitude(DysonNode node) => Mathf.RoundToInt(Mathf.Asin(Mathf.Clamp01(Mathf.Abs(node.pos.normalized.y))) * Mathf.Rad2Deg);
+
         private static bool AllowedByLatitiude (DysonNode node)
         {
             if (node == null) return true;
-            return Mathf.RoundToInt(Mathf.Asin(Mathf.Clamp01(Mathf.Abs(node.pos.normalized.y))) * Mathf.Rad2Deg) <= Mathf.RoundToInt(GameMain.history.dysonNodeLatitude);
+            return NodeLatitude(node) <= Mathf.RoundToInt(GameMain.history.dysonNodeLatitude);
         }
 
         [HarmonyPatch]
@@ -134,7 +134,7 @@ namespace DesignTo90
             {
                 yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructCp));
                 // theoretically, this could cause the needed cp to go negative
-                // but that shouldn't be possible unless there are already sails somewhere they shouldn't be
+                // but that shouldn't be possible unless there are already cells somewhere they shouldn't be
                 // and the game should be able to gracefully handle the scenario regardless
                 yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcCpReq));
             }
@@ -153,6 +153,34 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class NodeLimitReAuto
         {
+            private static void CheckRecalculation(DysonNode node, HashSet<DysonNode> recalculateSet)
+            {
+                if (node == null) return;
+                int newLimit = Mathf.RoundToInt(GameMain.history.dysonNodeLatitude);
+                int oldLimit = newLimit - 15;
+                int nodeLatitude = NodeLatitude(node);
+                // only check nodes in the new range
+                if (nodeLatitude > newLimit || nodeLatitude <= oldLimit) return;
+                recalculateSet.Add(node);
+                foreach (DysonFrame frame in node.frames ?? Enumerable.Empty<DysonFrame>())
+                {
+                    if (frame == null) continue;
+                    // add any connected nodes, but only ones that are already built
+                    if (frame.nodeA != null && NodeLatitude(frame.nodeA) <= oldLimit)  // ones in the new range will be added regardless
+                        recalculateSet.Add(frame.nodeA);
+                    if (frame.nodeB != null && NodeLatitude(frame.nodeB) <= oldLimit)
+                        recalculateSet.Add(frame.nodeB);
+                }
+                // just testing for frames isn't enough
+                // a polygon shell that includes a new node might also have an old node with frames going to other old nodes
+                foreach (DysonShell shell in node.shells ?? Enumerable.Empty<DysonShell>())
+                {
+                    // if any part of the shell pokes past the limit it won't get built
+                    if (shell?.nodes?.Any(shellNode => NodeLatitude(shellNode) > newLimit) ?? true) continue;
+                    recalculateSet.UnionWith(shell.nodes);
+                }
+            }
+
             public static MethodBase TargetMethod()
             {
                 return AccessTools.Method(typeof(GameHistoryData), nameof(GameHistoryData.UnlockTechFunction));
@@ -166,17 +194,30 @@ namespace DesignTo90
                 {
                     if (dysonSphere == null || dysonSphere.layerCount <= 0) continue;
 
-                    //const int autoNodesAfterExpansion = DysonSphere.kAutoNodeMax;
                     int autoNodesAfterExpansion = Mathf.Clamp(dysonSphere.totalConstructedNodeCount / 2, 1, DysonSphere.kAutoNodeMax) - dysonSphere.autoNodeCount;
                     for (int i = 0; i < autoNodesAfterExpansion; i++)
                         dysonSphere.PickAutoNode();
-
+#if SIMPLE_RECALC
                     foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
                         foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
                         {
-                            node?.RecalcSpReq();
-                            node?.RecalcCpReq();
+                            if (node == null) continue;
+                            node.RecalcSpReq();
+                            node.RecalcCpReq();
                         }
+#else
+                    HashSet<DysonNode> toRecalculate = new HashSet<DysonNode>();
+
+                    foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
+                        foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
+                            CheckRecalculation(node, toRecalculate);
+                    toRecalculate.Remove(null);    // shouldn't happen, but just to be sure
+                    foreach (DysonNode node in toRecalculate)
+                    {
+                        node.RecalcSpReq();
+                        node.RecalcCpReq();
+                    }
+#endif
                 }
             }
         }
