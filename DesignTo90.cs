@@ -1,6 +1,7 @@
 ﻿using BepInEx;
 using BepInEx.Logging;
 using HarmonyLib;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -25,8 +26,9 @@ namespace DesignTo90
             harmony = new Harmony(GUID);
             harmony.PatchAll(typeof(EnableFullBuild));
             harmony.PatchAll(typeof(NodeBuildLimiter));
-            harmony.PatchAll(typeof(NodeLimitReAuto));
             harmony.PatchAll(typeof(FrameLimiter));
+            harmony.PatchAll(typeof(ShellLimiter));
+            harmony.PatchAll(typeof(NodeLimitReAuto));
             Logger.LogMessage("DesignTo90 patches complete");
         }
 
@@ -116,6 +118,39 @@ namespace DesignTo90
         }
 
         [HarmonyPatch]
+        public static class ShellLimiter
+        {
+            private static readonly FieldInfo cpPerVertex = AccessTools.Field(typeof(DysonShell), nameof(DysonShell.cpPerVertex));
+
+            private static int CheckCpPerVertex(DysonShell dysonShell)
+            {
+                if (DSPGame.IsMenuDemo) return dysonShell.cpPerVertex;
+                List<DysonNode> nodes = dysonShell.nodes;
+                if (nodes?.Any(node => !AllowedByLatitiude(node)) ?? false) return 0;
+                else return dysonShell.cpPerVertex;
+            }
+
+            public static IEnumerable<MethodBase> TargetMethods()
+            {
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructCp));
+                // theoretically, this could cause the needed cp to go negative
+                // but that shouldn't be possible unless there are already sails somewhere they shouldn't be
+                // and the game should be able to gracefully handle the scenario regardless
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcCpReq));
+            }
+
+            public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            {
+                foreach (CodeInstruction instruction in instructions)
+                {
+                    if (instruction.LoadsField(cpPerVertex))
+                        yield return CodeInstruction.Call(typeof(ShellLimiter), nameof(CheckCpPerVertex));
+                    else yield return instruction;
+                }
+            }
+        }
+
+        [HarmonyPatch]
         public static class NodeLimitReAuto
         {
             public static MethodBase TargetMethod()
@@ -132,13 +167,16 @@ namespace DesignTo90
                     if (dysonSphere == null || dysonSphere.layerCount <= 0) continue;
 
                     //const int autoNodesAfterExpansion = DysonSphere.kAutoNodeMax;
-                    const int autoNodesAfterExpansion = 1;
+                    int autoNodesAfterExpansion = Mathf.Clamp(dysonSphere.totalConstructedNodeCount / 2, 1, DysonSphere.kAutoNodeMax) - dysonSphere.autoNodeCount;
                     for (int i = 0; i < autoNodesAfterExpansion; i++)
                         dysonSphere.PickAutoNode();
 
                     foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
                         foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
+                        {
                             node?.RecalcSpReq();
+                            node?.RecalcCpReq();
+                        }
                 }
             }
         }
