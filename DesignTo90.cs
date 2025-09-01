@@ -28,8 +28,6 @@ namespace DesignTo90
             harmony.PatchAll(typeof(FrameLimiter));
             harmony.PatchAll(typeof(ShellLimiter));
             harmony.PatchAll(typeof(NodeLimitReAuto));
-            harmony.PatchAll(typeof(NodeIdExport));
-            harmony.PatchAll(typeof(NodeIdImport));
         }
 
         private void OnDestroy()
@@ -155,6 +153,8 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class NodeLimitReAuto
         {
+            private const int latitudeTechUnlock = 26;  // is this defined in the code anywhere?
+
             private static void CheckRecalculation(DysonNode node, HashSet<DysonNode> recalculateSet)
             {
                 if (node == null) return;
@@ -190,7 +190,7 @@ namespace DesignTo90
 
             public static void Postfix(int func)
             {
-                if (func != 26) return; // this a const in the code anywhere?
+                if (func != latitudeTechUnlock) return;
                 if (GameMain.data.dysonSpheres == null) return;
                 foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres)
                 {
@@ -221,48 +221,6 @@ namespace DesignTo90
                     }
 #endif
                 }
-            }
-        }
-
-        // If the mod is removed mid-save, then nodes beyond the limit would persist upon loading and would be buildable, enabling a way to cheat
-        // So we intentionally break the ids of unbuildable nodes, making the sphere layer unloadable without the mod if it has any bad nodes
-        // If all layers of all spheres have valid nodes, this patch will have no effect and the mod will be safe to remove
-        private const int NodeIdOffset = 564257410;
-
-        [HarmonyPatch]
-        public static class NodeIdExport
-        {
-
-            public static MethodBase TargetMethod()
-            {
-                return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.Export));
-            }
-
-            public static void Prefix(DysonNode __instance)
-            {
-                if (!AllowedByLatitiude(__instance))
-                    __instance.id += NodeIdOffset;
-            }
-
-            public static void Postfix(DysonNode __instance)
-            {
-                if (__instance.id >= NodeIdOffset)
-                    __instance.id -= NodeIdOffset;
-            }
-        }
-
-        [HarmonyPatch]
-        public static class NodeIdImport
-        {
-            public static MethodBase TargetMethod()
-            {
-                return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.Import));
-            }
-
-            public static void Postfix(DysonNode __instance)
-            {
-                if (__instance.id >= NodeIdOffset)
-                    __instance.id -= NodeIdOffset;
             }
         }
     }
