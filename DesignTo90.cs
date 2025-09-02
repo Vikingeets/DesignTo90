@@ -14,7 +14,7 @@ namespace DesignTo90
     {
         public const string GUID = "com.voidchicken.DesignTo90";
         public const string NAME = "DesignTo90";
-        public const string VERSION = "0.0.1";
+        public const string VERSION = "1.0.0";
 
         private Harmony harmony;
         private static ManualLogSource logger;
@@ -24,7 +24,7 @@ namespace DesignTo90
             logger = Logger;
             harmony = new Harmony(GUID);
             harmony.PatchAll(typeof(EnableFullBuild));
-            harmony.PatchAll(typeof(NodeBuildLimiter));
+            harmony.PatchAll(typeof(NodeLimiter));
             harmony.PatchAll(typeof(FrameLimiter));
             harmony.PatchAll(typeof(ShellLimiter));
             harmony.PatchAll(typeof(NodeLimitReAuto));
@@ -46,14 +46,14 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class EnableFullBuild
         {
-            private static readonly FieldInfo dysonNodeLatitude = AccessTools.Field(typeof(GameHistoryData), nameof(GameHistoryData.dysonNodeLatitude));
-
             public static IEnumerable<MethodBase> TargetMethods()
             {
                 yield return AccessTools.Method(typeof(UIDysonBrush_Frame), "CheckCondition");
                 yield return AccessTools.Method(typeof(UIDysonBrush_Node), "_OnUpdate");
                 yield return AccessTools.Method(typeof(DysonBlueprintData), nameof(DysonBlueprintData.CheckLatLimit));
             }
+
+            private static readonly FieldInfo dysonNodeLatitude = AccessTools.Field(typeof(GameHistoryData), nameof(GameHistoryData.dysonNodeLatitude));
 
             public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
             {
@@ -63,7 +63,6 @@ namespace DesignTo90
                     {
                         yield return new CodeInstruction(OpCodes.Pop);
                         yield return new CodeInstruction(OpCodes.Ldc_R4, 90f);
-                        continue;
                     }
                     else yield return instruction;
                 }
@@ -71,7 +70,7 @@ namespace DesignTo90
         }
 
         [HarmonyPatch]
-        public static class NodeBuildLimiter
+        public static class NodeLimiter
         {
             public static MethodBase TargetMethod()
             {
@@ -91,6 +90,12 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class FrameLimiter
         {
+            public static IEnumerable<MethodBase> TargetMethods()
+            {
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructSp));
+                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcSpReq));
+            }
+
             private static readonly FieldInfo spMax = AccessTools.Field(typeof(DysonFrame), nameof(DysonFrame.spMax));
 
             private static int CheckSpMax(DysonFrame dysonFrame)
@@ -98,12 +103,6 @@ namespace DesignTo90
                 if (DSPGame.IsMenuDemo) return dysonFrame.spMax;
                 if (!AllowedByLatitiude(dysonFrame.nodeA) || !AllowedByLatitiude(dysonFrame.nodeB)) return 0;
                 else return dysonFrame.spMax;
-            }
-
-            public static IEnumerable<MethodBase> TargetMethods()
-            {
-                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructSp));
-                yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcSpReq));
             }
 
             public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
@@ -120,16 +119,6 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class ShellLimiter
         {
-            private static readonly FieldInfo cpPerVertex = AccessTools.Field(typeof(DysonShell), nameof(DysonShell.cpPerVertex));
-
-            private static int CheckCpPerVertex(DysonShell dysonShell)
-            {
-                if (DSPGame.IsMenuDemo) return dysonShell.cpPerVertex;
-                List<DysonNode> nodes = dysonShell.nodes;
-                if (nodes?.Any(node => !AllowedByLatitiude(node)) ?? false) return 0;
-                else return dysonShell.cpPerVertex;
-            }
-
             public static IEnumerable<MethodBase> TargetMethods()
             {
                 yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.ConstructCp));
@@ -137,6 +126,15 @@ namespace DesignTo90
                 // but that shouldn't be possible unless there are already cells somewhere they shouldn't be
                 // and the game should be able to gracefully handle the scenario regardless
                 yield return AccessTools.Method(typeof(DysonNode), nameof(DysonNode.RecalcCpReq));
+            }
+
+            private static readonly FieldInfo cpPerVertex = AccessTools.Field(typeof(DysonShell), nameof(DysonShell.cpPerVertex));
+
+            private static int CheckCpPerVertex(DysonShell dysonShell)
+            {
+                if (DSPGame.IsMenuDemo) return dysonShell.cpPerVertex;
+                if (dysonShell.nodes?.Any(node => !AllowedByLatitiude(node)) ?? false) return 0;
+                else return dysonShell.cpPerVertex;
             }
 
             public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
@@ -153,28 +151,29 @@ namespace DesignTo90
         [HarmonyPatch]
         public static class NodeLimitReAuto
         {
+            public static MethodBase TargetMethod()
+            {
+                return AccessTools.Method(typeof(GameHistoryData), nameof(GameHistoryData.UnlockTechFunction));
+            }
+
             private const int latitudeTechUnlock = 26;  // is this defined in the code anywhere?
 
             private static void CheckRecalculation(DysonNode node, HashSet<DysonNode> recalculateSet)
             {
-                if (node == null) return;
                 int newLimit = Mathf.RoundToInt(GameMain.history.dysonNodeLatitude);
                 int oldLimit = newLimit - 15;
                 int nodeLatitude = NodeLatitude(node);
                 // only check nodes in the new range
                 if (nodeLatitude > newLimit || nodeLatitude <= oldLimit) return;
                 recalculateSet.Add(node);
-                foreach (DysonFrame frame in node.frames ?? Enumerable.Empty<DysonFrame>())
+                foreach (DysonFrame frame in node.frames?.Where(frame => frame != null) ?? Enumerable.Empty<DysonFrame>())
                 {
-                    if (frame == null) continue;
                     // add any connected nodes, but only ones that are already buildable
                     if (frame.nodeA != null && NodeLatitude(frame.nodeA) <= oldLimit)  // ones in the new range will be added regardless
                         recalculateSet.Add(frame.nodeA);
                     if (frame.nodeB != null && NodeLatitude(frame.nodeB) <= oldLimit)
                         recalculateSet.Add(frame.nodeB);
                 }
-                // just testing for frames isn't enough
-                // a polygon shell that includes a new node might also have an old node with frames going to other old nodes
                 foreach (DysonShell shell in node.shells ?? Enumerable.Empty<DysonShell>())
                 {
                     // if any part of the shell pokes past the limit it won't get built
@@ -183,27 +182,16 @@ namespace DesignTo90
                 }
             }
 
-            public static MethodBase TargetMethod()
-            {
-                return AccessTools.Method(typeof(GameHistoryData), nameof(GameHistoryData.UnlockTechFunction));
-            }
-
             public static void Postfix(int func)
             {
                 if (func != latitudeTechUnlock) return;
                 if (GameMain.data.dysonSpheres == null) return;
-                foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres)
+                foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres.Where(sphere => sphere?.layerCount > 0))
                 {
-                    if (dysonSphere == null || dysonSphere.layerCount <= 0) continue;
-
-                    int autoNodesAfterExpansion = Mathf.Clamp(dysonSphere.totalConstructedNodeCount / 2, 1, DysonSphere.kAutoNodeMax) - dysonSphere.autoNodeCount;
-                    for (int i = 0; i < autoNodesAfterExpansion; i++)
-                        dysonSphere.PickAutoNode();
 #if SIMPLE_RECALC
                     foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
-                        foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
+                        foreach (DysonNode node in layer?.nodePool?.Where(node => node != null) ?? Enumerable.Empty<DysonNode>())
                         {
-                            if (node == null) continue;
                             node.RecalcSpReq();
                             node.RecalcCpReq();
                         }
@@ -211,7 +199,7 @@ namespace DesignTo90
                     HashSet<DysonNode> toRecalculate = new HashSet<DysonNode>();
 
                     foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)
-                        foreach (DysonNode node in layer?.nodePool ?? Enumerable.Empty<DysonNode>())
+                        foreach (DysonNode node in layer?.nodePool?.Where(node => node != null) ?? Enumerable.Empty<DysonNode>())
                             CheckRecalculation(node, toRecalculate);
                     toRecalculate.Remove(null);    // shouldn't happen, but just to be sure
                     foreach (DysonNode node in toRecalculate)
@@ -220,6 +208,9 @@ namespace DesignTo90
                         node.RecalcCpReq();
                     }
 #endif
+                    int autoNodesAfterExpansion = Mathf.Clamp(dysonSphere.totalConstructedNodeCount / 2, 1, DysonSphere.kAutoNodeMax) - dysonSphere.autoNodeCount;
+                    for (int i = 0; i < autoNodesAfterExpansion; i++)
+                        dysonSphere.PickAutoNode();
                 }
             }
         }
