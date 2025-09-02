@@ -27,7 +27,7 @@ namespace DesignTo90
             harmony.PatchAll(typeof(NodeLimiter));
             harmony.PatchAll(typeof(FrameLimiter));
             harmony.PatchAll(typeof(ShellLimiter));
-            harmony.PatchAll(typeof(NodeLimitReAuto));
+            harmony.PatchAll(typeof(HandleNewLimit));
         }
 
         private void OnDestroy()
@@ -152,7 +152,7 @@ namespace DesignTo90
         }
 
         [HarmonyPatch]
-        public static class NodeLimitReAuto
+        public static class HandleNewLimit
         {
             public static MethodBase TargetMethod()
             {
@@ -188,8 +188,7 @@ namespace DesignTo90
             public static void Postfix(int func)
             {
                 if (func != latitudeTechUnlock) return;
-                if (GameMain.data.dysonSpheres == null) return;
-                foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres.Where(sphere => sphere?.layerCount > 0))
+                foreach (DysonSphere dysonSphere in GameMain.data.dysonSpheres?.Where(sphere => sphere?.layerCount > 0) ?? Enumerable.Empty<DysonSphere>())
                 {
 #if SIMPLE_RECALC
                     foreach (DysonSphereLayer layer in dysonSphere.layersIdBased)

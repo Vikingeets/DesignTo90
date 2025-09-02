@@ -2,8 +2,8 @@
   "name": "DesignTo90",
   "version_number": "1.0.0",
   "website_url": "https://github.com/Vikingeets/DesignTo90",
-  "description": "Design to 90",
+  "description": "Allows planning or pasting of dyson spheres before the full latitude limit is researched.",
   "dependencies": [
-    "xiaoye97-BepInEx-5.4.17"
+    "xiaoye97-BepInEx-5.4.16"
   ]
 }
