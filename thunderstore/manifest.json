@@ -1,0 +1,9 @@
+{
+  "name": "DesignTo90",
+  "version_number": "1.0.0",
+  "website_url": "https://github.com/Vikingeets/DesignTo90",
+  "description": "Design to 90",
+  "dependencies": [
+    "xiaoye97-BepInEx-5.4.17"
+  ]
+}
