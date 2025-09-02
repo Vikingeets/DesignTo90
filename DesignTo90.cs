@@ -80,10 +80,13 @@ namespace DesignTo90
             public static void Postfix(ref int __result, DysonNode __instance)
             {
                 if (DSPGame.IsMenuDemo) return;
-                if (__result <= 0)
-                    return;
-                if (!AllowedByLatitiude(__instance))
-                    __result = 0;
+                lock (__instance)
+                {
+                    if (__result <= 0)
+                        return;
+                    if (!AllowedByLatitiude(__instance))
+                        __result = 0;
+                }
             }
         }
 
